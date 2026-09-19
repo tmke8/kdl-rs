@@ -1157,6 +1157,7 @@ impl<'a> NodeMapAccess<'a> {
     ) -> Self {
         let mut entries: Vec<(Cow<'a, str>, NodeMapValue<'a>)> = Vec::new();
 
+        // If this is called from `deserialize_map`, `fields` will be `None`.
         if let Some(fields) = fields {
             if fields.contains(&"#name") {
                 entries.push(("#name".into(), NodeMapValue::Ident(node.name())));
@@ -1166,8 +1167,7 @@ impl<'a> NodeMapAccess<'a> {
             {
                 entries.push(("#type".into(), NodeMapValue::Ident(ty)));
             }
-        }
-        if let Some(fields) = fields {
+
             let collect_all = fields.contains(&"#args");
             let collect_rest = fields.contains(&"#rest");
             let mut args = Vec::new();
@@ -1197,6 +1197,18 @@ impl<'a> NodeMapAccess<'a> {
             }
             if collect_rest {
                 entries.push(("#rest".into(), NodeMapValue::Args(rest)));
+            }
+        } else {
+            for (i, arg) in node
+                .entries()
+                .iter()
+                .filter(|e| e.name().is_none())
+                .enumerate()
+            {
+                let idx_name = format!("#{i}");
+                // Is it bad that we're pushing entries here that weren't requested by anyone?
+                // Is this observable when deserializing a hashmap?
+                entries.push((idx_name.into(), NodeMapValue::Arg(arg)));
             }
         }
 
