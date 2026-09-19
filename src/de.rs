@@ -1167,10 +1167,9 @@ impl<'a> NodeMapAccess<'a> {
                 entries.push(("#type".into(), NodeMapValue::Ident(ty)));
             }
         }
-        if let Some(fields) = fields
-            && let collect_all = fields.contains(&"#args")
-            && let collect_rest = fields.contains(&"#rest")
-        {
+        if let Some(fields) = fields {
+            let collect_all = fields.contains(&"#args");
+            let collect_rest = fields.contains(&"#rest");
             let mut args = Vec::new();
             let mut rest = Vec::new();
             for (i, arg) in node
