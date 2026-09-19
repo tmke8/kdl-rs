@@ -2109,6 +2109,52 @@ h 8
     }
 
     #[test]
+    fn flatten_with_args() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        #[serde(rename_all = "kebab-case")]
+        enum Color {
+            Rgb(u8, u8, u8),
+            Grayscale(f32),
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct ColorDef {
+            #[serde(rename = "#0")]
+            name: String,
+            // Externally tagged enum, flattened into the parent struct.
+            #[serde(flatten)]
+            color: Color,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            #[serde(rename = "color")]
+            colors: Vec<ColorDef>,
+        }
+
+        let kdl = r#"
+color red { rgb 255 0 0 }
+color lightgray grayscale=0.9
+"#;
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Config {
+                colors: vec![
+                    ColorDef {
+                        name: "red".into(),
+                        color: Color::Rgb(255, 0, 0),
+                    },
+                    ColorDef {
+                        name: "lightgray".into(),
+                        color: Color::Grayscale(0.9),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn bool_flag_children() {
         #[derive(Deserialize, Debug, PartialEq)]
         #[serde(rename_all = "kebab-case")]
