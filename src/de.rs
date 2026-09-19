@@ -1906,6 +1906,26 @@ gamma 3
     }
 
     #[test]
+    fn hashmap_props() {
+        use std::collections::HashMap;
+
+        let kdl = r#"
+map 0 alpha=1 beta=2 gamma=3
+"#;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            map: HashMap<String, i32>,
+        }
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(config.map.get("alpha"), Some(&1));
+        assert_eq!(config.map.get("beta"), Some(&2));
+        assert_eq!(config.map.get("gamma"), Some(&3));
+        assert_eq!(config.map.get("#0"), Some(&0));
+        assert_eq!(config.map.len(), 4);
+    }
+
+    #[test]
     fn newtype_struct() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Port(u16);
