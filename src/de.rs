@@ -203,6 +203,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::{fmt, iter};
 
+#[cfg(feature = "miette")]
 use miette::{Diagnostic, LabeledSpan, Severity, SourceCode, SourceSpan};
 use serde::Deserialize;
 use serde::de::value::StringDeserializer;
@@ -215,6 +216,7 @@ use crate::{KdlDiagnostic, KdlDocument, KdlEntry, KdlIdentifier, KdlNode, KdlVal
 pub struct Error {
     msg: String,
     input: Option<Arc<String>>,
+    #[cfg(feature = "miette")]
     span: Option<SourceSpan>,
     label: Option<String>,
     diagnostics: Vec<KdlDiagnostic>,
@@ -232,6 +234,7 @@ impl Error {
     }
 
     /// Gets the source span associated with this deserialization error.
+    #[cfg(feature = "miette")]
     pub fn span(&self) -> Option<SourceSpan> {
         self.span
     }
@@ -259,6 +262,7 @@ impl Error {
         self
     }
 
+    #[cfg(feature = "miette")]
     fn with_span(
         mut self,
         input: &Arc<String>,
@@ -338,6 +342,7 @@ fn str_deserializer(s: &str) -> de::value::StrDeserializer<'_, Error> {
     de::IntoDeserializer::into_deserializer(s)
 }
 
+#[cfg(feature = "miette")]
 fn entry_span(entry: &KdlEntry) -> SourceSpan {
     #[cfg(feature = "span")]
     {
@@ -349,6 +354,7 @@ fn entry_span(entry: &KdlEntry) -> SourceSpan {
     }
 }
 
+#[cfg(feature = "miette")]
 fn ident_span(ident: &KdlIdentifier) -> SourceSpan {
     #[cfg(feature = "span")]
     {
@@ -360,6 +366,7 @@ fn ident_span(ident: &KdlIdentifier) -> SourceSpan {
     }
 }
 
+#[cfg(feature = "miette")]
 fn node_span(node: &KdlNode) -> SourceSpan {
     #[cfg(feature = "span")]
     {
@@ -408,6 +415,7 @@ where
 struct IdentDeserializer<'a> {
     ident: &'a KdlIdentifier,
     input: &'a Arc<String>,
+    #[cfg(feature = "miette")]
     span: SourceSpan,
 }
 
@@ -473,6 +481,7 @@ impl<'a> IdentDeserializer<'a> {
 struct ValueDeserializer<'a> {
     value: &'a KdlValue,
     input: &'a Arc<String>,
+    #[cfg(feature = "miette")]
     span: SourceSpan,
 }
 

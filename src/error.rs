@@ -1,5 +1,8 @@
-use std::{error::Error, fmt::Display, iter, sync::Arc};
+#[cfg(feature = "miette")]
+use std::iter;
+use std::{error::Error, fmt::Display, sync::Arc};
 
+#[cfg(feature = "miette")]
 use miette::{Diagnostic, LabeledSpan, Severity, SourceSpan};
 
 #[cfg(doc)]
@@ -49,6 +52,7 @@ impl Display for KdlError {
 }
 impl Error for KdlError {}
 
+#[cfg(feature = "miette")]
 impl Diagnostic for KdlError {
     fn source_code(&self) -> Option<&dyn miette::SourceCode> {
         Some(&self.input)
@@ -70,6 +74,7 @@ pub struct KdlDiagnostic {
     pub input: Arc<String>,
 
     /// Offset in chars of the error.
+    #[cfg(feature = "miette")]
     pub span: SourceSpan,
 
     /// Message for the error itself.
@@ -82,6 +87,7 @@ pub struct KdlDiagnostic {
     pub help: Option<String>,
 
     /// Severity level for the Diagnostic.
+    #[cfg(feature = "miette")]
     pub severity: Severity,
 }
 
@@ -96,6 +102,7 @@ impl Display for KdlDiagnostic {
 }
 impl Error for KdlDiagnostic {}
 
+#[cfg(feature = "miette")]
 impl Diagnostic for KdlDiagnostic {
     fn source_code(&self) -> Option<&dyn miette::SourceCode> {
         Some(&self.input)
@@ -125,10 +132,12 @@ impl From<kdlv1::KdlError> for KdlError {
             input: input.clone(),
             diagnostics: vec![KdlDiagnostic {
                 input,
+                #[cfg(feature = "miette")]
                 span: SourceSpan::new(value.span.offset().into(), value.span.len()),
                 message: Some(format!("{}", value.kind)),
                 label: value.label.map(|x| x.into()),
                 help: value.help.map(|x| x.into()),
+                #[cfg(feature = "miette")]
                 severity: Severity::Error,
             }],
         }
@@ -143,10 +152,12 @@ mod tests {
     fn kdl_error() {
         let kdl_diagnostic = KdlDiagnostic {
             input: Default::default(),
+            #[cfg(feature = "miette")]
             span: SourceSpan::new(0.into(), 0),
             message: Default::default(),
             label: Default::default(),
             help: Default::default(),
+            #[cfg(feature = "miette")]
             severity: Default::default(),
         };
 
@@ -160,27 +171,32 @@ mod tests {
         assert!(kdl_error.source().is_none());
 
         // Test `Diagnostic` impl
-        let related: Vec<_> = kdl_error.related().unwrap().collect();
-        assert_eq!(related.len(), 2);
-        assert_eq!(
-            kdl_error
-                .source_code()
-                .unwrap()
-                .read_span(&SourceSpan::new(0.into(), 5), 0, 0)
-                .unwrap()
-                .data(),
-            b"bark?"
-        );
+        #[cfg(feature = "miette")]
+        {
+            let related: Vec<_> = kdl_error.related().unwrap().collect();
+            assert_eq!(related.len(), 2);
+            assert_eq!(
+                kdl_error
+                    .source_code()
+                    .unwrap()
+                    .read_span(&SourceSpan::new(0.into(), 5), 0, 0)
+                    .unwrap()
+                    .data(),
+                b"bark?"
+            );
+        }
     }
 
     #[test]
     fn kdl_diagnostic() {
         let mut kdl_diagnostic = KdlDiagnostic {
             input: Arc::new("Catastrophic failure!!!".to_owned()),
+            #[cfg(feature = "miette")]
             span: SourceSpan::new(0.into(), 3),
             message: None,
             label: Some("cute".to_owned()),
             help: Some("try harder?".to_owned()),
+            #[cfg(feature = "miette")]
             severity: Severity::Error,
         };
 
@@ -194,19 +210,22 @@ mod tests {
         assert!(kdl_diagnostic.source().is_none());
 
         // Test `Diagnostic` impl
-        let labels: Vec<_> = kdl_diagnostic.labels().unwrap().collect();
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].label().unwrap(), "cute");
-        assert_eq!(
-            kdl_diagnostic
-                .source_code()
-                .unwrap()
-                .read_span(labels[0].inner(), 0, 0)
-                .unwrap()
-                .data(),
-            b"Cat"
-        );
-        assert_eq!(kdl_diagnostic.help().unwrap().to_string(), "try harder?");
-        assert_eq!(kdl_diagnostic.severity().unwrap(), Severity::Error);
+        #[cfg(feature = "miette")]
+        {
+            let labels: Vec<_> = kdl_diagnostic.labels().unwrap().collect();
+            assert_eq!(labels.len(), 1);
+            assert_eq!(labels[0].label().unwrap(), "cute");
+            assert_eq!(
+                kdl_diagnostic
+                    .source_code()
+                    .unwrap()
+                    .read_span(labels[0].inner(), 0, 0)
+                    .unwrap()
+                    .data(),
+                b"Cat"
+            );
+            assert_eq!(kdl_diagnostic.help().unwrap().to_string(), "try harder?");
+            assert_eq!(kdl_diagnostic.severity().unwrap(), Severity::Error);
+        }
     }
 }

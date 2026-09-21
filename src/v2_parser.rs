@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "miette")]
 use miette::{Severity, SourceSpan};
 
 use num_traits::CheckedMul;
@@ -49,12 +50,14 @@ pub(crate) fn failure_from_errs(errs: Vec<ErrMode<KdlParseError>>, input: &str) 
             .map(|e| e.into_inner().unwrap())
             .map(|e| KdlDiagnostic {
                 input: src.clone(),
+                #[cfg(feature = "miette")]
                 span: e.span.unwrap_or_else(|| (0usize..0usize).into()),
                 message: e
                     .message
                     .or_else(|| e.label.clone().map(|l| format!("Expected {l}"))),
                 label: e.label.map(|l| format!("not {l}")),
                 help: e.help,
+                #[cfg(feature = "miette")]
                 severity: Severity::Error,
             })
             .collect(),
@@ -66,6 +69,7 @@ struct KdlParseContext {
     message: Option<String>,
     label: Option<String>,
     help: Option<String>,
+    #[cfg(feature = "miette")]
     severity: Option<Severity>,
 }
 
@@ -98,9 +102,11 @@ fn cx() -> KdlParseContext {
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub(crate) struct KdlParseError {
     pub(crate) message: Option<String>,
+    #[cfg(feature = "miette")]
     pub(crate) span: Option<SourceSpan>,
     pub(crate) label: Option<String>,
     pub(crate) help: Option<String>,
+    #[cfg(feature = "miette")]
     pub(crate) severity: Option<Severity>,
 }
 
@@ -109,9 +115,11 @@ impl<I: Stream> ParserError<I> for KdlParseError {
     fn from_input(_input: &I) -> Self {
         Self {
             message: None,
+            #[cfg(feature = "miette")]
             span: None,
             label: None,
             help: None,
+            #[cfg(feature = "miette")]
             severity: None,
         }
     }
@@ -135,7 +143,10 @@ impl<I: Stream> AddContext<I, KdlParseContext> for KdlParseError {
         self.message = ctx.message.or(self.message);
         self.label = ctx.label.or(self.label);
         self.help = ctx.help.or(self.help);
-        self.severity = ctx.severity.or(self.severity);
+        #[cfg(feature = "miette")]
+        {
+            self.severity = ctx.severity.or(self.severity);
+        }
         self
     }
 }
@@ -143,10 +154,12 @@ impl<I: Stream> AddContext<I, KdlParseContext> for KdlParseError {
 impl<'a> FromExternalError<Input<'a>, ParseIntError> for KdlParseError {
     fn from_external_error(_: &Input<'a>, e: ParseIntError) -> Self {
         Self {
+            #[cfg(feature = "miette")]
             span: None,
             message: Some(format!("{e}")),
             label: Some("invalid integer".into()),
             help: None,
+            #[cfg(feature = "miette")]
             severity: Some(Severity::Error),
         }
     }
@@ -155,10 +168,12 @@ impl<'a> FromExternalError<Input<'a>, ParseIntError> for KdlParseError {
 impl<'a> FromExternalError<Input<'a>, ParseFloatError> for KdlParseError {
     fn from_external_error(_input: &Input<'a>, e: ParseFloatError) -> Self {
         Self {
+            #[cfg(feature = "miette")]
             span: None,
             label: Some("invalid float".into()),
             help: None,
             message: Some(format!("{e}")),
+            #[cfg(feature = "miette")]
             severity: Some(Severity::Error),
         }
     }
@@ -169,10 +184,12 @@ struct NegativeUnsignedError;
 impl<'a> FromExternalError<Input<'a>, NegativeUnsignedError> for KdlParseError {
     fn from_external_error(_input: &Input<'a>, _e: NegativeUnsignedError) -> Self {
         Self {
+            #[cfg(feature = "miette")]
             span: None,
             message: Some("Tried to parse a negative number as an unsigned integer".into()),
             label: Some("negative unsigned int".into()),
             help: None,
+            #[cfg(feature = "miette")]
             severity: Some(Severity::Error),
         }
     }
@@ -786,9 +803,11 @@ fn node_children(input: &mut Input<'_>) -> PResult<KdlDocument> {
                         &_after_nodes,
                         ErrMode::Cut(KdlParseError {
                             message: Some("Closing '}' was not found after nodes".into()),
+                            #[cfg(feature = "miette")]
                             span: Some((_after_open_loc.._after_nodes_loc).into()),
                             label: Some("closed".into()),
                             help: None,
+                            #[cfg(feature = "miette")]
                             severity: Some(Severity::Error),
                         }),
                     )?;
@@ -1366,9 +1385,11 @@ fn raw_string(input: &mut Input<'_>) -> PResult<KdlValue> {
     if body == "\"" {
         Err(ErrMode::Cut(KdlParseError {
             message: Some("Single-line raw strings cannot look like multi-line ones".into()),
+            #[cfg(feature = "miette")]
             span: Some((_start_loc..input.previous_token_end()).into()),
             label: Some("triple quotes".into()),
             help: Some("Consider using a regular escaped string if all you want is a single quote: \"\\\"\"".into()),
+            #[cfg(feature = "miette")]
             severity: Some(Severity::Error),
         }))
     } else {
@@ -2099,6 +2120,7 @@ impl_negatable_unsigned!(u8, u16, u32, u64, u128, usize);
 
 #[cfg(test)]
 mod failure_tests {
+    #[cfg(feature = "miette")]
     use miette::Severity;
 
     use crate::{KdlDiagnostic, KdlDocument, KdlError};

@@ -12,8 +12,10 @@ rust-version = "1.95"
 edition = "2024"
 
 [features]
-default = ["span", "serde"]
-span = []
+# default = ["span", "serde", "miette"]
+default = ["serde"]
+span = ["miette"]
+miette = ["dep:miette"]
 v1-fallback = ["v1"]
 v1 = ["kdlv1"]
 
@@ -21,7 +23,7 @@ v1 = ["kdlv1"]
 members = ["tools/*"]
 
 [dependencies]
-miette.workspace = true
+miette = { workspace = true, optional = true }
 num-traits = "0.2.19"
 serde = { version = "1.0.210", optional = true }
 winnow = { version = "1.0.4", features = ["alloc", "unstable-recover"] }
