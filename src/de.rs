@@ -1167,14 +1167,15 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>, Self::Error> {
-        let Some(child) = self.iter.next() else {
-            return Ok(None);
-        };
-        seed.deserialize(NodeDeserializer {
-            node: child,
-            input: self.input,
-        })
-        .map(Some)
+        self.iter
+            .next()
+            .map(|node| {
+                seed.deserialize(NodeDeserializer {
+                    node,
+                    input: self.input,
+                })
+            })
+            .transpose()
     }
 }
 
