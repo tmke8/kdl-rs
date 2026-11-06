@@ -898,9 +898,8 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
         if self.node.children().is_some() {
             // Node has children → we won't interpret the args as a sequence.
             // So treat the node itself as one-element sequence.
-            let slice = &[self.node.clone()];
             visitor.visit_seq(NodeListSeqAccess {
-                iter: slice.into_iter(),
+                iter: std::slice::from_ref(self.node).iter(),
                 input: self.input,
             })
         } else {
