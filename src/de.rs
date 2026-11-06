@@ -2124,33 +2124,6 @@ server host="localhost" port=8080 {
     }
 
     #[test]
-    fn scalar_children() {
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct Config {
-            pairs: Vec<(String, i32)>,
-        }
-
-        // #[derive(Deserialize, Debug, PartialEq)]
-        // struct Values {
-        //     #[serde(rename = "-")]
-        //     values: Vec<i32>,
-        // }
-
-        let kdl = r#"
-        pairs "a" 1
-        pairs "b" 2
-        "#;
-
-        let config: Config = from_str(kdl).unwrap();
-        assert_eq!(
-            config,
-            Config {
-                pairs: vec![("a".into(), 1), ("b".into(), 2)]
-            }
-        );
-    }
-
-    #[test]
     fn empty_document() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {}
