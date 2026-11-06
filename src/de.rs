@@ -590,7 +590,8 @@ impl<'de, 'a> de::Deserializer<'de> for DocumentDeserializer<'a> {
         visitor.visit_seq(NodeListSeqAccess {
             iter: self.doc.nodes().iter(),
             input: self.input,
-            first_node: None,
+            parent_node: None,
+            has_yielded_parent: false,
         })
     }
 
@@ -727,26 +728,11 @@ impl<'de, 'a> MapAccess<'de> for DocumentMapAccess<'a> {
 struct NodeDeserializer<'a> {
     node: &'a KdlNode,
     input: &'a Arc<String>,
-    first_node: Option<&'a KdlNode>,
 }
 
 impl<'a> NodeDeserializer<'a> {
     fn new(node: &'a KdlNode, input: &'a Arc<String>) -> Self {
-        NodeDeserializer {
-            node,
-            input,
-            first_node: None,
-        }
-    }
-
-    fn fallback_node(&self) -> &'a KdlNode {
-        if let Some(n) = self.first_node
-            && self.is_scalar()
-        {
-            n
-        } else {
-            self.node
-        }
+        NodeDeserializer { node, input }
     }
 
     fn args(&self) -> Vec<&'a KdlEntry> {
@@ -923,7 +909,8 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
             visitor.visit_seq(NodeListSeqAccess {
                 iter: children.nodes().iter(),
                 input: self.input,
-                first_node: (children.nodes().len() == 1).then_some(self.node),
+                parent_node: Some(self.node),
+                has_yielded_parent: false,
             })
         } else {
             // Empty → empty sequence
@@ -949,7 +936,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        visitor.visit_map(NodeMapAccess::new(self.fallback_node(), self.input, None))
+        visitor.visit_map(NodeMapAccess::new(self.node, self.input, None))
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -958,11 +945,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        visitor.visit_map(NodeMapAccess::new(
-            self.fallback_node(),
-            self.input,
-            Some(fields),
-        ))
+        visitor.visit_map(NodeMapAccess::new(self.node, self.input, Some(fields)))
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -1180,7 +1163,8 @@ impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
 struct NodeListSeqAccess<'a> {
     iter: std::slice::Iter<'a, KdlNode>,
     input: &'a Arc<String>,
-    first_node: Option<&'a KdlNode>,
+    parent_node: Option<&'a KdlNode>,
+    has_yielded_parent: bool,
 }
 
 impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
@@ -1190,16 +1174,100 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>, Self::Error> {
-        self.iter
-            .next()
-            .map(|node| {
-                seed.deserialize(NodeDeserializer {
-                    node,
+        if self.has_yielded_parent {
+            return Ok(None);
+        }
+        let Some(next_child) = self.iter.next() else {
+            return Ok(None);
+        };
+        if let Some(parent) = self.parent_node.take() {
+            // let `NodeOrChildDeserializer` decide whether to treat this as a single node or the
+            // child node
+            return seed
+                .deserialize(ChildOrNodeDeserializer {
+                    node: next_child,
+                    parent_node: parent,
                     input: self.input,
-                    first_node: self.first_node,
+                    has_yielded_parent: &mut self.has_yielded_parent,
                 })
-            })
-            .transpose()
+                .map(Some);
+        }
+        seed.deserialize(NodeDeserializer {
+            node: next_child,
+            input: self.input,
+        })
+        .map(Some)
+    }
+}
+
+struct ChildOrNodeDeserializer<'a, 'b> {
+    node: &'a KdlNode,
+    parent_node: &'a KdlNode,
+    input: &'a Arc<String>,
+    has_yielded_parent: &'b mut bool,
+}
+
+impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
+    type Error = Error;
+    // **Picks the parent:** `deserialize_struct`, `deserialize_map`, `deserialize_tuple`, `deserialize_tuple_struct`
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        *self.has_yielded_parent = true;
+        NodeDeserializer::new(self.parent_node, self.input)
+            .deserialize_struct(name, fields, visitor)
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        *self.has_yielded_parent = true;
+        NodeDeserializer::new(self.parent_node, self.input).deserialize_map(visitor)
+    }
+
+    fn deserialize_tuple<V: Visitor<'de>>(
+        self,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        *self.has_yielded_parent = true;
+        NodeDeserializer::new(self.parent_node, self.input).deserialize_tuple(len, visitor)
+    }
+
+    fn deserialize_tuple_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        *self.has_yielded_parent = true;
+        NodeDeserializer::new(self.parent_node, self.input)
+            .deserialize_tuple_struct(name, len, visitor)
+    }
+
+    // **Passes the decision through:** `deserialize_option` → `visit_some(self)` and `deserialize_newtype_struct` → `visit_newtype_struct(self)`
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        visitor.visit_some(self)
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        visitor.visit_newtype_struct(self)
+    }
+
+    // everything else delegates to `NodeDeserializer::new(child)`
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        NodeDeserializer::new(self.node, self.input).deserialize_any(visitor)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char
+        str string bytes byte_buf unit unit_struct seq
+        identifier ignored_any enum
     }
 }
 
@@ -2117,6 +2185,69 @@ server host="localhost" port=8080 {
     }
 
     #[test]
+    fn children_with_children() {
+        #[derive(Deserialize, Debug, PartialEq, Default)]
+        struct Document {
+            routes: Vec<Routes>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq, Default)]
+        struct Routes {
+            #[serde(rename = "path")]
+            routes: Vec<String>,
+        }
+
+        let kdl = r#"
+        routes {
+            path "/api/v1"
+            path "/api/v2"
+        }
+        "#;
+
+        let doc: Document = from_str(kdl).unwrap();
+        assert_eq!(
+            doc,
+            Document {
+                routes: vec![Routes {
+                    routes: vec!["/api/v1".into(), "/api/v2".into()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn scalar_children() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            values: Values,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Values {
+            #[serde(rename = "-")]
+            values: Vec<i32>,
+        }
+
+        let kdl = r#"
+        values {
+            - 1
+            - 2
+            - 3
+        }
+        "#;
+
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Config {
+                values: Values {
+                    values: vec![1, 2, 3],
+                }
+            }
+        );
+    }
+
+    #[test]
     fn empty_document() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {}
@@ -2350,6 +2481,30 @@ h 8
                     host: "localhost".into(),
                     ports: vec![8080, 8081, 8082],
                 },
+            }
+        );
+    }
+
+    #[test]
+    fn list_of_nodes_as_children() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            #[serde(rename = "item")]
+            items: Vec<Item>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Item {
+            #[serde(rename = "#0")]
+            name: String,
+        }
+
+        let _ = from_str::<Config>(r#"item { foo "a"; bar "b" }"#).unwrap_err();
+        let cfg: Config = from_str(r#"item "a"; item "b""#).unwrap();
+        assert_eq!(
+            cfg,
+            Config {
+                items: vec![Item { name: "a".into() }, Item { name: "b".into() }]
             }
         );
     }
