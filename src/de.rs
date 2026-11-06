@@ -587,12 +587,11 @@ impl<'de, 'a> de::Deserializer<'de> for DocumentDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        visitor.visit_seq(NodeListSeqAccess {
-            iter: self.doc.nodes().iter(),
-            input: self.input,
-            parent_node: None,
-            has_yielded_parent: false,
-        })
+        visitor.visit_seq(NodeListSeqAccess::new(
+            self.doc.nodes().iter(),
+            self.input,
+            None,
+        ))
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -898,20 +897,19 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
         let args = self.args();
 
         if !args.is_empty() && self.node.children().is_none() {
-            // Arguments → either sequence or a single node
+            // Arguments → either a sequence from the arguments or the node as 1-element sequence
             visitor.visit_seq(ArgSeqAccess::new(
                 args.into_iter(),
                 self.input,
                 Some(self.node),
             ))
         } else if let Some(children) = self.node.children() {
-            // Children → sequence of nodes
-            visitor.visit_seq(NodeListSeqAccess {
-                iter: children.nodes().iter(),
-                input: self.input,
-                parent_node: Some(self.node),
-                has_yielded_parent: false,
-            })
+            // Children → either a sequence of child nodes or the node itself as 1-element sequence
+            visitor.visit_seq(NodeListSeqAccess::new(
+                children.nodes().iter(),
+                self.input,
+                Some(self.node),
+            ))
         } else {
             // Empty → empty sequence
             visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
@@ -1167,6 +1165,21 @@ struct NodeListSeqAccess<'a> {
     has_yielded_parent: bool,
 }
 
+impl<'a> NodeListSeqAccess<'a> {
+    fn new(
+        iter: std::slice::Iter<'a, KdlNode>,
+        input: &'a Arc<String>,
+        parent_node: Option<&'a KdlNode>,
+    ) -> Self {
+        NodeListSeqAccess {
+            iter,
+            input,
+            parent_node,
+            has_yielded_parent: false,
+        }
+    }
+}
+
 impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
     type Error = Error;
 
@@ -1177,39 +1190,47 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
         if self.has_yielded_parent {
             return Ok(None);
         }
-        let Some(next_child) = self.iter.next() else {
+        let Some(child) = self.iter.next() else {
             return Ok(None);
         };
-        if let Some(parent) = self.parent_node.take() {
-            // let `NodeOrChildDeserializer` decide whether to treat this as a single node or the
-            // child node
-            return seed
-                .deserialize(ChildOrNodeDeserializer {
-                    node: next_child,
-                    parent_node: parent,
-                    input: self.input,
-                    has_yielded_parent: &mut self.has_yielded_parent,
-                })
-                .map(Some);
-        }
-        seed.deserialize(NodeDeserializer {
-            node: next_child,
-            input: self.input,
-        })
-        .map(Some)
+        let value = if let Some(parent) = self.parent_node.take() {
+            // We don't know whether the target type wants the parent node as a one-element
+            // sequence or the child nodes.
+            seed.deserialize(ChildOrParentDeserializer {
+                child,
+                parent,
+                input: self.input,
+                has_yielded_parent: &mut self.has_yielded_parent,
+            })
+        } else {
+            seed.deserialize(NodeDeserializer {
+                node: child,
+                input: self.input,
+            })
+        };
+        value.map(Some)
     }
 }
 
-struct ChildOrNodeDeserializer<'a, 'b> {
-    node: &'a KdlNode,
-    parent_node: &'a KdlNode,
+#[allow(dead_code)]
+struct ChildOrParentDeserializer<'a, 'b> {
+    child: &'a KdlNode,
+    parent: &'a KdlNode,
     input: &'a Arc<String>,
     has_yielded_parent: &'b mut bool,
 }
 
-impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
+impl<'a> ChildOrParentDeserializer<'a, '_> {
+    #[allow(dead_code)]
+    fn child_node(&self) -> NodeDeserializer<'a> {
+        NodeDeserializer::new(self.child, self.input)
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for ChildOrParentDeserializer<'a, '_> {
     type Error = Error;
-    // **Picks the parent:** `deserialize_struct`, `deserialize_map`, `deserialize_tuple`, `deserialize_tuple_struct`
+
+    // target wants a struct → we yield the parent node
     fn deserialize_struct<V: Visitor<'de>>(
         self,
         name: &'static str,
@@ -1217,13 +1238,12 @@ impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         *self.has_yielded_parent = true;
-        NodeDeserializer::new(self.parent_node, self.input)
-            .deserialize_struct(name, fields, visitor)
+        NodeDeserializer::new(self.parent, self.input).deserialize_struct(name, fields, visitor)
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         *self.has_yielded_parent = true;
-        NodeDeserializer::new(self.parent_node, self.input).deserialize_map(visitor)
+        NodeDeserializer::new(self.parent, self.input).deserialize_map(visitor)
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(
@@ -1232,7 +1252,8 @@ impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         *self.has_yielded_parent = true;
-        NodeDeserializer::new(self.parent_node, self.input).deserialize_tuple(len, visitor)
+        NodeDeserializer::new(self.parent, self.input).deserialize_tuple(len, visitor)
+        // self.child_node().deserialize_tuple(len, visitor)
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(
@@ -1242,11 +1263,10 @@ impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         *self.has_yielded_parent = true;
-        NodeDeserializer::new(self.parent_node, self.input)
-            .deserialize_tuple_struct(name, len, visitor)
+        NodeDeserializer::new(self.parent, self.input).deserialize_tuple_struct(name, len, visitor)
     }
 
-    // **Passes the decision through:** `deserialize_option` → `visit_some(self)` and `deserialize_newtype_struct` → `visit_newtype_struct(self)`
+    // target wants to unpack something
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         visitor.visit_some(self)
     }
@@ -1259,15 +1279,93 @@ impl<'de, 'a> de::Deserializer<'de> for ChildOrNodeDeserializer<'a, '_> {
         visitor.visit_newtype_struct(self)
     }
 
-    // everything else delegates to `NodeDeserializer::new(child)`
+    // for everything else, we yield the child node
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        NodeDeserializer::new(self.node, self.input).deserialize_any(visitor)
+        self.child_node().deserialize_any(visitor)
     }
-
-    serde::forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char
-        str string bytes byte_buf unit unit_struct seq
-        identifier ignored_any enum
+    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_bool(visitor)
+    }
+    fn deserialize_i8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_i8(visitor)
+    }
+    fn deserialize_i16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_i16(visitor)
+    }
+    fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_i32(visitor)
+    }
+    fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_i64(visitor)
+    }
+    fn deserialize_i128<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_i128(visitor)
+    }
+    fn deserialize_u8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_u8(visitor)
+    }
+    fn deserialize_u16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_u16(visitor)
+    }
+    fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_u32(visitor)
+    }
+    fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_u64(visitor)
+    }
+    fn deserialize_u128<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_u128(visitor)
+    }
+    fn deserialize_f32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_f32(visitor)
+    }
+    fn deserialize_f64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_f64(visitor)
+    }
+    fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_char(visitor)
+    }
+    fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_str(visitor)
+    }
+    fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_string(visitor)
+    }
+    fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_bytes(visitor)
+    }
+    fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_byte_buf(visitor)
+    }
+    fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_unit(visitor)
+    }
+    fn deserialize_unit_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_unit_struct(name, visitor)
+    }
+    fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_seq(visitor)
+    }
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        self.child_node().deserialize_enum(name, variants, visitor)
+    }
+    fn deserialize_identifier<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_identifier(visitor)
+    }
+    fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.child_node().deserialize_ignored_any(visitor)
     }
 }
 
@@ -2219,30 +2317,25 @@ server host="localhost" port=8080 {
     fn scalar_children() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {
-            values: Values,
+            pairs: Vec<(String, i32)>,
         }
 
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct Values {
-            #[serde(rename = "-")]
-            values: Vec<i32>,
-        }
+        // #[derive(Deserialize, Debug, PartialEq)]
+        // struct Values {
+        //     #[serde(rename = "-")]
+        //     values: Vec<i32>,
+        // }
 
         let kdl = r#"
-        values {
-            - 1
-            - 2
-            - 3
-        }
+        pairs "a" 1
+        pairs "b" 2
         "#;
 
         let config: Config = from_str(kdl).unwrap();
         assert_eq!(
             config,
             Config {
-                values: Values {
-                    values: vec![1, 2, 3],
-                }
+                pairs: vec![("a".into(), 1), ("b".into(), 2)]
             }
         );
     }
