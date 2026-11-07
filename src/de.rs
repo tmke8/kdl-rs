@@ -893,11 +893,18 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        visitor.visit_seq(ArgSeqAccess::new(
-            self.args().into_iter(),
-            self.input,
-            Some(self.node),
-        ))
+        let args = self.args();
+        if args.is_empty() && self.node.children().is_none() {
+            // Finding a single node with no arguments and no children when a sequence is requested
+            // is fundamentally ambiguous, so we just decide here to treat it as an empty sequence.
+            visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
+        } else {
+            visitor.visit_seq(ArgSeqAccess::new(
+                args.into_iter(),
+                self.input,
+                Some(self.node),
+            ))
+        }
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(
@@ -1034,19 +1041,24 @@ impl<'de, 'a> SeqAccess<'de> for ArgSeqAccess<'a> {
             // we only have one node to yield
             return Ok(None);
         }
-        let Some(e) = self.iter.next() else {
-            return Ok(None);
-        };
         let value = if let Some(parent) = self.parent_node.take() {
-            // let `ArgOrNodeDeserializer` decide whether to treat this as a single argument or the
-            // parent node
-            seed.deserialize(ArgOrNodeDeserializer {
-                entry: e,
-                parent_node: parent,
-                input: self.input,
-                has_yielded_node: &mut self.has_yielded_node,
-            })
+            if let Some(e) = self.iter.next() {
+                // let `ArgOrNodeDeserializer` decide whether to start yielding arguments or the
+                // node itself
+                seed.deserialize(ArgOrNodeDeserializer {
+                    entry: e,
+                    parent_node: parent,
+                    input: self.input,
+                    has_yielded_node: &mut self.has_yielded_node,
+                })
+            } else {
+                self.has_yielded_node = true;
+                seed.deserialize(NodeDeserializer::new(parent, self.input))
+            }
         } else {
+            let Some(e) = self.iter.next() else {
+                return Ok(None);
+            };
             seed.deserialize(ValueDeserializer::new(e, self.input))
         };
         value.map(Some)
