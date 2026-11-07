@@ -896,7 +896,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
         let args = self.args();
         if args.is_empty() && self.node.children().is_none() {
             // Finding a single node with no arguments and no children when a sequence is requested
-            // is fundamentally ambiguous, so we just decide here to treat it as an empty sequence.
+            // is unfortunately ambiguous, so we just decide here to treat it as an empty sequence.
             visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
         } else {
             visitor.visit_seq(ArgSeqAccess::new(
