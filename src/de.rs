@@ -1803,6 +1803,39 @@ config { route "/api/users"; }
                 }]
             }
         );
+
+        let kdl = r#"
+config {
+    route "/api/users"
+    route "/api/comments"
+}
+        "#;
+
+        let config: Configs = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Configs {
+                config: vec![Config {
+                    route: vec!["/api/users".into(), "/api/comments".into()]
+                }]
+            }
+        );
+
+        let kdl = r#"
+config {
+    route "/api/users" "/api/comments"
+}
+        "#;
+
+        let config: Configs = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Configs {
+                config: vec![Config {
+                    route: vec!["/api/users".into(), "/api/comments".into()]
+                }]
+            }
+        );
     }
 
     #[test]
@@ -2089,54 +2122,6 @@ server host="localhost" port=8080 {
                     port: 8080,
                     routes: Routes { path: vec![] },
                 },
-            }
-        );
-    }
-
-    #[test]
-    fn children_with_children() {
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct Document {
-            #[serde(rename = "group")]
-            route_groups: Vec<RouteGroup>,
-        }
-
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct RouteGroup {
-            #[serde(rename = "route")]
-            routes: Vec<String>,
-        }
-
-        let kdl = r#"
-        group {
-            route "/api/v1"
-            route "/api/v2"
-        }
-        "#;
-
-        let doc: Document = from_str(kdl).unwrap();
-        assert_eq!(
-            doc,
-            Document {
-                route_groups: vec![RouteGroup {
-                    routes: vec!["/api/v1".into(), "/api/v2".into()],
-                }],
-            }
-        );
-
-        let kdl = r#"
-        group {
-            route "/api/v1" "/api/v2"
-        }
-        "#;
-
-        let doc: Document = from_str(kdl).unwrap();
-        assert_eq!(
-            doc,
-            Document {
-                route_groups: vec![RouteGroup {
-                    routes: vec!["/api/v1".into(), "/api/v2".into()],
-                }],
             }
         );
     }
