@@ -2121,6 +2121,32 @@ server host="localhost" port=8080 {
     }
 
     #[test]
+    fn children_with_list_of_args() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            items: Vec<Vec<i32>>,
+        }
+
+        let kdl = r#"
+        items 1 2 3
+        items 4 5 6
+        "#;
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Config {
+                items: vec![vec![1, 2, 3], vec![4, 5, 6]],
+            }
+        );
+
+        let kdl = r#"
+        items
+        "#;
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(config, Config { items: vec![] });
+    }
+
+    #[test]
     fn empty_document() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {}
