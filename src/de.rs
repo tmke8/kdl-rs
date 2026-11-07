@@ -893,21 +893,11 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        if self.node.children().is_some() {
-            // Node has children → we won't interpret the args as a sequence.
-            // So treat the node itself as one-element sequence.
-            visitor.visit_seq(NodeListSeqAccess {
-                iter: std::slice::from_ref(self.node).iter(),
-                input: self.input,
-            })
-        } else {
-            // No children → either a sequence from the arguments or the node as 1-element sequence
-            visitor.visit_seq(ArgSeqAccess::new(
-                self.args().into_iter(),
-                self.input,
-                Some(self.node),
-            ))
-        }
+        visitor.visit_seq(ArgSeqAccess::new(
+            self.args().into_iter(),
+            self.input,
+            Some(self.node),
+        ))
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(
