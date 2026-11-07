@@ -1073,7 +1073,7 @@ struct ArgOrNodeDeserializer<'a, 'b> {
 impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
     type Error = Error;
 
-    // target wants a non-scalar → we yield the node
+    // target does not want a scalar → we yield the node
     fn deserialize_struct<V: Visitor<'de>>(
         self,
         name: &'static str,
@@ -1128,7 +1128,7 @@ impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
         visitor.visit_newtype_struct(self)
     }
 
-    // target wants a scalar → we yield this one argument
+    // target wants a scalar → we start yielding arguments
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         ValueDeserializer::new(self.entry, self.input).deserialize_any(visitor)
     }
