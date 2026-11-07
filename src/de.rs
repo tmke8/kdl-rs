@@ -1073,7 +1073,7 @@ struct ArgOrNodeDeserializer<'a, 'b> {
 impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
     type Error = Error;
 
-    // target wants a struct → we yield the node
+    // target wants a non-scalar → we yield the node
     fn deserialize_struct<V: Visitor<'de>>(
         self,
         name: &'static str,
@@ -1106,6 +1106,28 @@ impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
             .deserialize_tuple_struct(name, len, visitor)
     }
 
+    fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        *self.has_yielded_node = true;
+        NodeDeserializer::new(self.parent_node, self.input).deserialize_seq(visitor)
+    }
+
+    // target wants to unpack something
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        if matches!(self.entry.value(), KdlValue::Null) {
+            visitor.visit_none()
+        } else {
+            visitor.visit_some(self)
+        }
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _n: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Error> {
+        visitor.visit_newtype_struct(self)
+    }
+
     // target wants a scalar → we yield this one argument
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         ValueDeserializer::new(self.entry, self.input).deserialize_any(visitor)
@@ -1128,27 +1150,9 @@ impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
         ValueDeserializer::new(self.entry, self.input).deserialize_str(visitor)
     }
 
-    // target wants to unpack something
-    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if matches!(self.entry.value(), KdlValue::Null) {
-            visitor.visit_none()
-        } else {
-            visitor.visit_some(self)
-        }
-    }
-
-    fn deserialize_newtype_struct<V: Visitor<'de>>(
-        self,
-        _n: &'static str,
-        visitor: V,
-    ) -> Result<V::Value, Error> {
-        visitor.visit_newtype_struct(self)
-    }
-
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char
         bytes byte_buf unit unit_struct identifier ignored_any
-        seq
     }
 }
 
@@ -2091,21 +2095,22 @@ server host="localhost" port=8080 {
 
     #[test]
     fn children_with_children() {
-        #[derive(Deserialize, Debug, PartialEq, Default)]
+        #[derive(Deserialize, Debug, PartialEq)]
         struct Document {
-            routes: Vec<Routes>,
+            #[serde(rename = "group")]
+            route_groups: Vec<RouteGroup>,
         }
 
-        #[derive(Deserialize, Debug, PartialEq, Default)]
-        struct Routes {
-            #[serde(rename = "path")]
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct RouteGroup {
+            #[serde(rename = "route")]
             routes: Vec<String>,
         }
 
         let kdl = r#"
-        routes {
-            path "/api/v1"
-            path "/api/v2"
+        group {
+            route "/api/v1"
+            route "/api/v2"
         }
         "#;
 
@@ -2113,7 +2118,23 @@ server host="localhost" port=8080 {
         assert_eq!(
             doc,
             Document {
-                routes: vec![Routes {
+                route_groups: vec![RouteGroup {
+                    routes: vec!["/api/v1".into(), "/api/v2".into()],
+                }],
+            }
+        );
+
+        let kdl = r#"
+        group {
+            route "/api/v1" "/api/v2"
+        }
+        "#;
+
+        let doc: Document = from_str(kdl).unwrap();
+        assert_eq!(
+            doc,
+            Document {
+                route_groups: vec![RouteGroup {
                     routes: vec!["/api/v1".into(), "/api/v2".into()],
                 }],
             }
@@ -2124,26 +2145,38 @@ server host="localhost" port=8080 {
     fn children_with_list_of_args() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {
-            items: Vec<Vec<i32>>,
+            #[serde(rename = "vector")]
+            vectors: Vec<Vec<i32>>,
         }
 
         let kdl = r#"
-        items 1 2 3
-        items 4 5 6
+        vector 1 2 3
         "#;
         let config: Config = from_str(kdl).unwrap();
         assert_eq!(
             config,
             Config {
-                items: vec![vec![1, 2, 3], vec![4, 5, 6]],
+                vectors: vec![vec![1, 2, 3]],
             }
         );
 
         let kdl = r#"
-        items
+        vector 1 2 3
+        vector 4 5 6
         "#;
         let config: Config = from_str(kdl).unwrap();
-        assert_eq!(config, Config { items: vec![] });
+        assert_eq!(
+            config,
+            Config {
+                vectors: vec![vec![1, 2, 3], vec![4, 5, 6]],
+            }
+        );
+
+        let kdl = r#"
+        vector
+        "#;
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(config, Config { vectors: vec![] });
     }
 
     #[test]
