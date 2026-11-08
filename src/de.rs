@@ -893,12 +893,25 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        // A sequence was requested, but we only have a single node. We have to decide whether to
+        // yield the arguments as the sequence, or to yield the node itself as a one-element sequence.
         let args = self.args();
-        if args.is_empty() && self.node.children().is_none() {
-            // Finding a single node with no arguments and no children when a sequence is requested
-            // is unfortunately ambiguous, so we just decide here to treat it as an empty sequence.
-            visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
+        if args.is_empty() {
+            // If the node has no arguments, we have to make some guesses about what was intended.
+            if self.node.children().is_some() {
+                // If the node has children, we're guessing that it's the node itself that is the
+                // sequence element.
+                visitor.visit_seq(NodeListSeqAccess {
+                    iter: std::slice::from_ref(self.node).iter(),
+                    input: self.input,
+                })
+            } else {
+                // If the node has nothing, we just decide here to treat it as an empty sequence.
+                visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
+            }
         } else {
+            // If the node has arguments, we wait until we know more about the type of the
+            // sequence elements, before we make the decision.
             visitor.visit_seq(ArgSeqAccess::new(
                 args.into_iter(),
                 self.input,
@@ -1041,30 +1054,26 @@ impl<'de, 'a> SeqAccess<'de> for ArgSeqAccess<'a> {
             // we only have one node to yield
             return Ok(None);
         }
+        let Some(e) = self.iter.next() else {
+            return Ok(None);
+        };
         let value = if let Some(parent) = self.parent_node.take() {
-            if let Some(e) = self.iter.next() {
-                // let `ArgOrNodeDeserializer` decide whether to start yielding arguments or the
-                // node itself
-                seed.deserialize(ArgOrNodeDeserializer {
-                    entry: e,
-                    parent_node: parent,
-                    input: self.input,
-                    has_yielded_node: &mut self.has_yielded_node,
-                })
-            } else {
-                self.has_yielded_node = true;
-                seed.deserialize(NodeDeserializer::new(parent, self.input))
-            }
+            // let `ArgOrNodeDeserializer` decide whether to start yielding arguments or the
+            // node itself
+            seed.deserialize(ArgOrNodeDeserializer {
+                entry: e,
+                parent_node: parent,
+                input: self.input,
+                has_yielded_node: &mut self.has_yielded_node,
+            })
         } else {
-            let Some(e) = self.iter.next() else {
-                return Ok(None);
-            };
             seed.deserialize(ValueDeserializer::new(e, self.input))
         };
         value.map(Some)
     }
 }
 
+/// Yields the argument (`entry`) if the target type wants a scalar, otherwise yields the node.
 struct ArgOrNodeDeserializer<'a, 'b> {
     entry: &'a KdlEntry,
     parent_node: &'a KdlNode,
@@ -2045,6 +2054,13 @@ item "x" "y"
                 ],
             }
         );
+        let kdl = r#"
+item {
+    foo "a" "b"
+    bar "x" "y"
+}
+"#;
+        let _ = from_str::<Config>(kdl).unwrap_err();
     }
 
     #[test]
@@ -2400,30 +2416,6 @@ h 8
                     host: "localhost".into(),
                     ports: vec![8080, 8081, 8082],
                 },
-            }
-        );
-    }
-
-    #[test]
-    fn vec_of_nodes_as_children() {
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct Config {
-            #[serde(rename = "item")]
-            items: Vec<Item>,
-        }
-
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct Item {
-            #[serde(rename = "#0")]
-            name: String,
-        }
-
-        let _ = from_str::<Config>(r#"item { foo "a"; bar "b" }"#).unwrap_err();
-        let cfg: Config = from_str(r#"item "a"; item "b""#).unwrap();
-        assert_eq!(
-            cfg,
-            Config {
-                items: vec![Item { name: "a".into() }, Item { name: "b".into() }]
             }
         );
     }
